@@ -5,16 +5,35 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 # Setting hyperparameters
-batch_size = 32     # How many independent sequences to be processed in parallel
-block_size = 8      # maximum context length for prediction
-epochs = 5000
+# batch_size = 64        # How many independent sequences to be processed in parallel
+# block_size = 256       # maximum context length for prediction
+# epochs = 5000
+# eval_interval = 500
+# learning_rate = 1e-4
+# device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# eval_iters = 200
+# n_embed = 384
+# n_head = 6
+# n_layer = 6
+# dropout = 0.2
+
+# --- Faster Hyperparameters ---
+batch_size = 32        # REDUCED: 64 is huge for this. 32 gives faster step times.
+block_size = 128       # REDUCED: Attention is quadratic (O(N^2)). 128 is 4x faster than 256!
+epochs = 5000          # (Usually means 'max_iters' in Karpathy's code)
 eval_interval = 500
-learning_rate = 1e-3
+learning_rate = 3e-4   # INCREASED: Smaller models can handle larger learning rates.
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 200
-n_embed = 32
+eval_iters = 50        # REDUCED: You don't need 200 batches to estimate loss. 50 is plenty and saves massive time during eval spikes.
+
+# --- Slimmer Architecture ---
+n_embed = 256          # REDUCED: 384 is overkill for 1M words. 256 means much faster matrix math.
+n_head = 4             # REDUCED: Must divide n_embed evenly (256 / 4 = 64 head size).
+n_layer = 4            # REDUCED: 4 layers is plenty to learn basic grammar and structure.
+dropout = 0.2
 
 print(device)
+# exit()
 
 torch.manual_seed(13372)
 
@@ -42,7 +61,7 @@ val_data = data[n:]
 # Batch creation
 def get_batch(split):
     data = train_data if split == 'train' else val_data
-    ix = torch.randint((len(data) - block_size), (batch_size,))
+    ix = torch.randint(0,(len(data) - block_size), (batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     x, y = x.to(device), y.to(device)
@@ -69,10 +88,12 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embed, n_embed)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads],dim=-1)
         out = self.proj(out)
+        out = self.dropout(out)
         return out
 
 # Head of an attention module
@@ -84,6 +105,7 @@ class Head(nn.Module):
         self.query = nn.Linear(n_embed, head_size, bias=False)
         self.value = nn.Linear(n_embed, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -91,10 +113,11 @@ class Head(nn.Module):
         q = self.query(x)
         v = self.value(x)
 
-        wei = q @ k.transpose(-2, -1) * (C**-0.5)
+        wei = q @ k.transpose(-2, -1) * (T**-0.5)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))    # Decoder block
         wei = F.softmax(wei, dim=-1)
 
+        wei = self.dropout(wei)
         out = wei @ v
 
         return out
@@ -107,6 +130,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embed,4 * n_embed),
             nn.ReLU(),
             nn.Linear(4 * n_embed, n_embed),
+            nn.Dropout(dropout), 
         )
 
     def forward(self, x):
@@ -120,10 +144,12 @@ class Block(nn.Module):
         head_size = n_embed // n_head
         self.sa = MultiHeadAttention(head_size, n_head)
         self.ffwd = FeedForward(n_embed)
+        self.ln1 = nn.LayerNorm(n_embed)
+        self.ln2 = nn.LayerNorm(n_embed)
     
     def forward(self, x):
-        x = x + self.sa(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
         return x
 
 # Biagram Model from notebook
@@ -137,11 +163,13 @@ class BiagramLanguageModel(nn.Module):
         # self.sa_heads = MultiHeadAttention(4, n_embed//4)
         # self.ffwd = FeedForward(n_embed)
         # Instead of one we have multiple blocks of attention and feed forward blocks as per the diagram in the paper
-        self.blocks = nn.Sequential(
-            Block(n_embed, n_head=4),
-            Block(n_embed, n_head=4),
-            Block(n_embed, n_head=4),
-        )
+        self.blocks = nn.Sequential(*[Block(n_embed, n_head=n_head) for _ in range(n_layer)])
+        # self.blocks = nn.Sequential(
+        #     Block(n_embed, n_head=4),
+        #     Block(n_embed, n_head=4),
+        #     Block(n_embed, n_head=4),
+        #     nn.LayerNorm(n_embed),
+        # )
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -206,3 +234,4 @@ for iter in range(epochs):
 # Sampling from the model
 context = torch.zeros((1,1), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+f.close()
