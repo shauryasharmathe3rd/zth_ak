@@ -128,7 +128,7 @@ class FeedForward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_embed,4 * n_embed),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(4 * n_embed, n_embed),
             nn.Dropout(dropout), 
         )
@@ -152,8 +152,8 @@ class Block(nn.Module):
         x = x + self.ffwd(self.ln2(x))
         return x
 
-# Biagram Model from notebook
-class BiagramLanguageModel(nn.Module):
+# Attention Model converted from Biagram Model from the Wavenet notebook
+class AttentionLanguageModel(nn.Module):
 
     def __init__(self):
         super().__init__()
@@ -209,9 +209,10 @@ class BiagramLanguageModel(nn.Module):
         
         return idx
     
-model = BiagramLanguageModel()
+model = AttentionLanguageModel()
 m = model.to(device=device)
-
+# print the number of parameters in the model
+print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 
 # Optimiser (AdamW) which edits the learning rate as per the epochs
 optimiser = torch.optim.AdamW(model.parameters(), lr=learning_rate)
