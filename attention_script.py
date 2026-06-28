@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F 
 import matplotlib.pyplot as plt
+import tiktoken
 
 # Setting hyperparameters
 # batch_size = 64        # How many independent sequences to be processed in parallel
@@ -51,6 +52,9 @@ itos = {i:s for s, i in stoi.items()}
 
 encode = lambda s : [stoi[c] for c in s]
 decode = lambda l: ''.join([itos[i] for i in l])
+
+# # Using gpt 4 tiktoken as encoder and decoder
+# enc_tk = tiktoken.get_encoding("cl100k_base")
 
 # Traning and testing splits
 data = torch.tensor(encode(text), dtype=torch.long)
